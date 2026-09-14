@@ -3,7 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
-  DEMO_VESSEL,
+  calculateBearingDeg,
+  createInitialDemoVessel,
+  DEMO_TICK_MS,
+  DEMO_VESSELS,
   MAP_ATTRIBUTION,
   MAP_BOUNDS,
   MAP_CENTER,
@@ -14,6 +17,10 @@ import {
 
 function formatUnknown(value: string | number | null): string {
   return value === null || value === "" ? "Нет данных" : String(value);
+}
+
+function createTimestamp(): string {
+  return new Date().toISOString();
 }
 
 function formatCoordinates(vessel: Vessel): string {
@@ -97,13 +104,22 @@ function VesselCard({ vessel }: { vessel: Vessel }) {
 
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [selectedVessel, setSelectedVessel] = useState<Vessel | null>(null);
+  const markersRef = useRef<Map<string, import("leaflet").Marker>>(new Map());
+  const initialVesselsRef = useRef<Vessel[]>(
+    DEMO_VESSELS.map((config) => createInitialDemoVessel(config, createTimestamp())),
+  );
+  const vesselsRef = useRef(initialVesselsRef.current);
+  const [vessels, setVessels] = useState<Vessel[]>(initialVesselsRef.current);
+  const [selectedVesselId, setSelectedVesselId] = useState<string | null>(null);
+  const selectedVessel = vessels.find(({ id }) => id === selectedVesselId) ?? null;
 
   useEffect(() => {
     let disposed = false;
     let map: import("leaflet").Map | undefined;
     let resizeObserver: ResizeObserver | undefined;
     let invalidateSize: (() => void) | undefined;
+    let timer: number | undefined;
+    const routeIndexes = DEMO_VESSELS.map(() => 0);
 
     void import("leaflet").then((leaflet) => {
       if (disposed || !containerRef.current) {
@@ -123,23 +139,61 @@ export default function MapView() {
         })
         .addTo(map);
 
-      const iconType = DEMO_VESSEL.courseDeg === null ? "neutral" : "course";
-      const iconRotation = DEMO_VESSEL.courseDeg ?? 0;
-      const vesselIcon = leaflet.divIcon({
-        className: "vessel-icon",
-        html: `<span data-vessel-id="${DEMO_VESSEL.id}" data-icon="${iconType}" aria-label="${DEMO_VESSEL.name ?? "Судно"}" style="--vessel-course: ${iconRotation}deg"></span>`,
-        iconSize: [28, 28],
-        iconAnchor: [14, 14],
+      initialVesselsRef.current.forEach((vessel) => {
+        const marker = leaflet
+          .marker([vessel.lat, vessel.lon], {
+            icon: createVesselIcon(leaflet, vessel),
+          })
+          .on("click", () => {
+            setSelectedVesselId(vessel.id);
+          })
+          .addTo(map!);
+
+        markersRef.current.set(vessel.id, marker);
       });
 
-      leaflet
-        .marker([DEMO_VESSEL.lat, DEMO_VESSEL.lon], {
-          icon: vesselIcon,
-        })
-        .on("click", () => {
-          setSelectedVessel(DEMO_VESSEL);
-        })
-        .addTo(map);
+      const startedAt = createTimestamp();
+      const startedVessels = initialVesselsRef.current.map((vessel) => ({
+        ...vessel,
+        timestamp: startedAt,
+      }));
+      initialVesselsRef.current = startedVessels;
+      vesselsRef.current = startedVessels;
+      setVessels(startedVessels);
+
+      timer = window.setInterval(() => {
+        const timestamp = createTimestamp();
+
+        const nextVessels = vesselsRef.current.map((vessel, index) => {
+          const config = DEMO_VESSELS[index];
+          const currentIndex = routeIndexes[index];
+          const nextIndex = Math.min(currentIndex + 1, config.route.length - 1);
+
+          if (nextIndex === currentIndex) {
+            return vessel;
+          }
+
+          routeIndexes[index] = nextIndex;
+          const previousPoint = config.route[currentIndex];
+          const nextPoint = config.route[nextIndex];
+          const nextVessel: Vessel = {
+            ...vessel,
+            lat: nextPoint[0],
+            lon: nextPoint[1],
+            speedKnots: nextIndex === config.route.length - 1 ? 0 : config.speedKnots,
+            courseDeg: calculateBearingDeg(previousPoint, nextPoint),
+            timestamp,
+          };
+          const marker = markersRef.current.get(vessel.id);
+
+          marker?.setLatLng([nextVessel.lat, nextVessel.lon]);
+          marker?.setIcon(createVesselIcon(leaflet, nextVessel));
+          return nextVessel;
+        });
+
+        vesselsRef.current = nextVessels;
+        setVessels(nextVessels);
+      }, DEMO_TICK_MS);
 
       invalidateSize = () => {
         map?.invalidateSize({ animate: false });
@@ -153,6 +207,10 @@ export default function MapView() {
 
     return () => {
       disposed = true;
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+      }
+      markersRef.current.clear();
       resizeObserver?.disconnect();
       if (invalidateSize) {
         window.removeEventListener("resize", invalidateSize);
@@ -171,4 +229,16 @@ export default function MapView() {
       </aside>
     </div>
   );
+}
+
+function createVesselIcon(leaflet: typeof import("leaflet"), vessel: Vessel) {
+  const iconType = vessel.courseDeg === null ? "neutral" : "course";
+  const iconRotation = vessel.courseDeg ?? 0;
+
+  return leaflet.divIcon({
+    className: "vessel-icon",
+    html: `<span data-vessel-id="${vessel.id}" data-icon="${iconType}" aria-label="${vessel.name ?? "Судно"}" style="--vessel-course: ${iconRotation}deg"></span>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  });
 }

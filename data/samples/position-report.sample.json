@@ -1,0 +1,32 @@
+{
+  "MetaData": {
+    "MMSI": 538012240,
+    "MMSI_String": 538012240,
+    "ShipName": "ULSAN               ",
+    "latitude": 51.03221,
+    "longitude": 1.56976,
+    "time_utc": "2026-09-17 19:00:44.111370471 +0000 UTC"
+  },
+  "MessageType": "PositionReport",
+  "Message": {
+    "PositionReport": {
+      "MessageID": 1,
+      "RepeatIndicator": 0,
+      "UserID": 538012240,
+      "Valid": true,
+      "NavigationalStatus": 0,
+      "RateOfTurn": -3,
+      "Sog": 11.3,
+      "PositionAccuracy": false,
+      "Longitude": 1.5697583333333334,
+      "Latitude": 51.03220833333333,
+      "Cog": 40.9,
+      "TrueHeading": 41,
+      "Timestamp": 41,
+      "SpecialManoeuvreIndicator": 0,
+      "Spare": 0,
+      "Raim": false,
+      "CommunicationState": 67150
+    }
+  }
+}

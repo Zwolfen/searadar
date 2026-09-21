@@ -1,5 +1,9 @@
+import type { Vessel } from "../config/map";
+import { parsePositionReport } from "./position-report-parser";
+
 export const AISSTREAM_URL = "wss://stream.aisstream.io/v0/stream";
 export const AISSTREAM_WINDOW_MS = 15_000;
+export const AISSTREAM_MAX_VESSELS = 100;
 
 export type ReaderClock = {
   now: () => number;
@@ -11,7 +15,7 @@ type ReaderMessageEvent = {
   data: unknown;
 };
 
-type ReaderSocket = {
+export type ReaderSocket = {
   addEventListener: (
     event: string,
     listener: (event: Event | ReaderMessageEvent) => void,
@@ -36,13 +40,23 @@ export type SnapshotReaderOptions = {
   signal?: AbortSignal;
 };
 
-export type SnapshotReaderResult =
-  | { ok: true; raw: unknown | null; attemptedAt: string; collectedAt: string }
-  | {
-      ok: false;
-      code: "connect_failed" | "provider_error" | "disconnected" | "internal";
-      attemptedAt: string;
-    };
+type SnapshotCollectionSuccess = {
+  ok: true;
+  vessels: Vessel[];
+  collectedAt: string;
+  windowSeconds: number;
+  count: number;
+  truncated: boolean;
+  reason: "window_elapsed" | "limit_reached";
+};
+
+type SnapshotCollectionFailure = {
+  ok: false;
+  code: "connect_failed" | "provider_error" | "disconnected" | "internal";
+  attemptedAt: string;
+};
+
+export type SnapshotCollectionResult = SnapshotCollectionSuccess | SnapshotCollectionFailure;
 
 const systemClock: ReaderClock = {
   now: Date.now,
@@ -79,13 +93,50 @@ async function decodeMessage(data: unknown): Promise<unknown> {
   throw new TypeError("Unsupported WebSocket message data");
 }
 
-export function readSnapshot({
+function isSubscriptionConfirmation(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "MessageType" in value &&
+    value.MessageType === "SubscriptionConfirmation"
+  );
+}
+
+function isProviderError(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "MessageType" in value &&
+    value.MessageType === "Error"
+  );
+}
+
+function createSuccess(
+  vessels: Map<string, Vessel>,
+  clock: ReaderClock,
+  reason: SnapshotCollectionSuccess["reason"],
+  truncated: boolean,
+): SnapshotCollectionSuccess {
+  const values = [...vessels.values()];
+
+  return {
+    ok: true,
+    vessels: values,
+    collectedAt: new Date(clock.now()).toISOString(),
+    windowSeconds: AISSTREAM_WINDOW_MS / 1000,
+    count: values.length,
+    truncated,
+    reason,
+  };
+}
+
+export function collectSnapshot({
   apiKey,
   boundingBox,
   socketFactory = createSocket,
   clock = systemClock,
   signal,
-}: SnapshotReaderOptions): Promise<SnapshotReaderResult> {
+}: SnapshotReaderOptions): Promise<SnapshotCollectionResult> {
   const attemptedAt = new Date(clock.now()).toISOString();
 
   return new Promise((resolve) => {
@@ -94,8 +145,9 @@ export function readSnapshot({
     let opened = false;
     let subscribed = false;
     let settled = false;
+    const vessels = new Map<string, Vessel>();
 
-    const finish = (result: SnapshotReaderResult) => {
+    const finish = (result: SnapshotCollectionResult) => {
       if (settled) {
         return;
       }
@@ -132,28 +184,41 @@ export function readSnapshot({
     };
 
     const handleMessage = (event: Event | ReaderMessageEvent) => {
-      if (!subscribed) {
-        finish({ ok: false, code: "internal", attemptedAt });
+      if (settled || !subscribed) {
         return;
       }
 
       void decodeMessage((event as ReaderMessageEvent).data)
         .then((raw) => {
-          if (
-            typeof raw === "object" &&
-            raw !== null &&
-            "MessageType" in raw &&
-            raw.MessageType === "SubscriptionConfirmation"
-          ) {
+          if (settled || isSubscriptionConfirmation(raw)) {
             return;
           }
 
-          finish({
-            ok: true,
-            raw,
-            attemptedAt,
-            collectedAt: new Date(clock.now()).toISOString(),
-          });
+          if (isProviderError(raw)) {
+            finish({ ok: false, code: "provider_error", attemptedAt });
+            return;
+          }
+
+          const vessel = parsePositionReport(raw);
+          if (vessel === null) {
+            return;
+          }
+
+          const previous = vessels.get(vessel.id);
+          if (previous === undefined) {
+            vessels.set(vessel.id, vessel);
+          } else {
+            const previousTime = Date.parse(previous.timestamp);
+            const nextTime = Date.parse(vessel.timestamp);
+            if (nextTime > previousTime) {
+              vessels.set(vessel.id, vessel);
+            }
+            return;
+          }
+
+          if (vessels.size === AISSTREAM_MAX_VESSELS) {
+            finish(createSuccess(vessels, clock, "limit_reached", true));
+          }
         })
         .catch(() => {
           finish({ ok: false, code: "provider_error", attemptedAt });
@@ -186,12 +251,7 @@ export function readSnapshot({
 
     timeout = clock.setTimeout(() => {
       if (opened && subscribed) {
-        finish({
-          ok: true,
-          raw: null,
-          attemptedAt,
-          collectedAt: new Date(clock.now()).toISOString(),
-        });
+        finish(createSuccess(vessels, clock, "window_elapsed", false));
       } else {
         finish({ ok: false, code: "connect_failed", attemptedAt });
       }

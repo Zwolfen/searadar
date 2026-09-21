@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 
 import { MAP_BOUNDS } from "../../../config/map";
 import {
-  readSnapshot,
-  type SnapshotReaderResult,
+  AISSTREAM_WINDOW_MS,
+  collectSnapshot,
+  type SnapshotCollectionResult,
 } from "../../../server/aisstream-reader";
 
 export const runtime = "nodejs";
@@ -33,7 +34,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const result = await readSnapshot({
+  const result = await collectSnapshot({
     apiKey,
     boundingBox: MAP_BOUNDS,
     signal: request.signal,
@@ -42,9 +43,20 @@ export async function GET(request: Request) {
   return toResponse(result);
 }
 
-function toResponse(result: SnapshotReaderResult) {
+function toResponse(result: SnapshotCollectionResult) {
   if (result.ok) {
-    return NextResponse.json(result, { status: 200 });
+    return NextResponse.json(
+      {
+        ok: true,
+        vessels: result.vessels,
+        collectedAt: result.collectedAt,
+        windowSeconds: AISSTREAM_WINDOW_MS / 1000,
+        count: result.count,
+        truncated: result.truncated,
+        reason: result.reason,
+      },
+      { status: 200 },
+    );
   }
 
   return NextResponse.json(

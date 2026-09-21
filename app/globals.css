@@ -50,12 +50,28 @@ main {
   font: 0.875rem/1.25rem sans-serif;
 }
 
-.button-placeholder {
-  min-height: 0;
+.load-button {
+  min-height: 2.25rem;
+  border: 1px solid #9ca3af;
+  border-radius: 0.25rem;
+  background: #f9fafb;
+  color: #1f2937;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.375rem 0.5rem;
+}
+
+.load-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .data-source {
   font-weight: 600;
+}
+
+.status-message {
+  margin: 0;
 }
 
 .vessel-card {

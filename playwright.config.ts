@@ -9,7 +9,13 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      testMatch: ["selection.spec.ts", "r2-ui-motion.spec.ts"],
       use: { ...devices["Desktop Chrome"], channel: "chrome" },
+    },
+    {
+      name: "node",
+      testMatch: "**/*.node.spec.ts",
+      use: {},
     },
   ],
   webServer: {
